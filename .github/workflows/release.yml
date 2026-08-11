@@ -1,0 +1,331 @@
+name: Release to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version from pyproject.toml and Cargo.toml
+        required: true
+        default: "0.1.0"
+        type: string
+      confirm_release:
+        description: Publish to PyPI and create formal GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release request
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Require main and explicit confirmation
+        env:
+          CONFIRMED: ${{ inputs.confirm_release }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$CONFIRMED" = "true"
+      - id: version
+        name: Match Python, Rust, and requested versions
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          requested = os.environ["REQUESTED_VERSION"]
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          cargo = tomllib.loads(pathlib.Path("Cargo.toml").read_text())
+          assert requested == pyproject["project"]["version"] == cargo["package"]["version"] == "0.1.0"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("tag=v%s\n" % requested)
+          PY
+
+  wheels:
+    name: Wheel / ${{ matrix.label }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: linux-x86_64, os: ubuntu-22.04, target: x86_64, manylinux: "2014"}
+          - {label: linux-aarch64, os: ubuntu-24.04-arm, target: aarch64, manylinux: "2014"}
+          - {label: macos-arm64, os: macos-15, target: aarch64, manylinux: "off"}
+          - {label: macos-x86_64, os: macos-15-intel, target: x86_64, manylinux: "off"}
+          - {label: windows-x86_64, os: windows-2022, target: x64, manylinux: "off"}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build locked native wheel
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380
+        with:
+          command: build
+          maturin-version: v1.11.5
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --compatibility pypi --out dist
+      - name: Install and verify exact native wheel
+        run: |
+          python -m pip install "pytest>=8,<10"
+          python -c "import glob,subprocess,sys; w=glob.glob('dist/*.whl'); assert len(w)==1,w; subprocess.check_call([sys.executable,'-m','pip','install','--force-reinstall',w[0]])"
+          python -c "import importlib.util,roman; n=importlib.util.find_spec('roman._native'); assert n and n.origin.endswith(('.so','.pyd')); assert roman.toRoman(972)=='CMLXXII'"
+      - name: Candidate and complete upstream suites
+        shell: bash
+        run: |
+          python -m pytest -q tests
+          candidate_root=$(python -c 'import site; print(site.getsitepackages()[0])')
+          PYTHON=python CANDIDATE_EXPECTED_ROOT="$candidate_root" bash scripts/run_upstream_full.sh
+      - name: Isolated 10,000-case differential on exact wheel
+        shell: bash
+        run: |
+          python -m venv oracle-venv
+          oracle_python=oracle-venv/bin/python
+          if [ ! -x "$oracle_python" ]; then oracle_python=oracle-venv/Scripts/python; fi
+          python scripts/run_differential.py --oracle-python "$oracle_python" --candidate-python "$(python -c 'import sys; print(sys.executable)')"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-wheel-${{ matrix.label }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  fallback:
+    name: Universal fallback wheel
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build and verify universal wheel
+        run: |
+          python -m pip install "setuptools>=77" wheel build "pytest>=8,<10"
+          python scripts/build_fallback_wheel.py --out-dir dist
+          python -m pip install --force-reinstall --no-deps dist/*-py3-none-any.whl
+          python -c "import roman; assert roman.__file__.endswith('.py'); assert roman.toRoman(972)=='CMLXXII'"
+          python -m pytest -q tests
+          candidate_root=$(python -c 'import site; print(site.getsitepackages()[0])')
+          PYTHON=python CANDIDATE_EXPECTED_ROOT="$candidate_root" bash scripts/run_upstream_full.sh
+          python -m venv oracle-venv
+          python scripts/run_differential.py --oracle-python oracle-venv/bin/python --candidate-python "$(python -c 'import sys; print(sys.executable)')"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-wheel-universal-fallback
+          path: dist/*-py3-none-any.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Source distribution
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build and prove sdist
+        run: |
+          python -m pip install "maturin==1.11.5" "pytest>=8,<10"
+          maturin sdist --out dist
+          python -m pip wheel --no-deps --wheel-dir sdist-wheel dist/*.tar.gz
+          python -m pip install --force-reinstall sdist-wheel/*.whl
+          python -m pytest -q tests
+          candidate_root=$(python -c 'import site; print(site.getsitepackages()[0])')
+          PYTHON=python CANDIDATE_EXPECTED_ROOT="$candidate_root" bash scripts/run_upstream_full.sh
+          python -m venv oracle-venv
+          python scripts/run_differential.py --oracle-python oracle-venv/bin/python --candidate-python "$(python -c 'import sys; print(sys.executable)')"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  collect:
+    name: Audit immutable release set
+    needs: [validate, wheels, fallback, sdist]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Audit exact release set
+        run: |
+          python -m pip install packaging twine
+          python scripts/inspect_python_artifacts.py --artifact-dir dist --repository-root "$GITHUB_WORKSPACE" --expected-native-wheels 5
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-release-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  benchmark:
+    name: Benchmark exact immutable macOS arm64 wheel
+    needs: [validate, collect]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-release-distributions
+          path: dist
+      - name: Measure exact release artifact after equality
+        shell: bash
+        run: |
+          wheels=(dist/*-cp310-abi3-macosx_11_0_arm64.whl)
+          test "${#wheels[@]}" = 1
+          python -m pip install --no-deps "${wheels[0]}"
+          mkdir release-evidence
+          python scripts/run_benchmark.py --artifact "${wheels[0]}" --output-json release-evidence/release-benchmark.json --output-md release-evidence/release-benchmark.md --samples 15 --iterations 10 --warmup 3
+          python - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path("release-evidence/release-benchmark.json")
+          data = json.loads(path.read_text())
+          data["source_commit"] = os.environ["GITHUB_SHA"]
+          path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-release-benchmark
+          path: release-evidence/*
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish immutable set to PyPI
+    needs: [validate, collect, benchmark]
+    runs-on: ubuntu-22.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/fast-roman-rs/${{ inputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-release-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          packages-dir: dist/
+
+  post-publish:
+    name: PyPI install / ${{ matrix.label }}
+    needs: [validate, publish-pypi]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: linux-x86_64, os: ubuntu-22.04}
+          - {label: linux-aarch64, os: ubuntu-24.04-arm}
+          - {label: macos-arm64, os: macos-15}
+          - {label: macos-x86_64, os: macos-15-intel}
+          - {label: windows-x86_64, os: windows-2022}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install from public PyPI with retry
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: >-
+          python -c "import os,subprocess,sys,time;
+          spec='fast-roman-rs=='+os.environ['RELEASE_VERSION'];
+          [(subprocess.run([sys.executable,'-m','pip','install','--no-cache-dir','--index-url','https://pypi.org/simple',spec]).returncode==0 and sys.exit(0)) or time.sleep(20) for _ in range(6)];
+          sys.exit('public PyPI install failed')"
+      - name: Verify native public artifact and upstream suite
+        shell: bash
+        run: |
+          python -m pip install "pytest>=8,<10"
+          python -c "import importlib.util,roman; n=importlib.util.find_spec('roman._native'); assert n and n.origin.endswith(('.so','.pyd')); assert roman.toRoman(972)=='CMLXXII'"
+          candidate_root=$(python -c 'import site; print(site.getsitepackages()[0])')
+          PYTHON=python CANDIDATE_EXPECTED_ROOT="$candidate_root" bash scripts/run_upstream_full.sh
+          python -m venv oracle-venv
+          oracle_python=oracle-venv/bin/python
+          if [ ! -x "$oracle_python" ]; then oracle_python=oracle-venv/Scripts/python; fi
+          python scripts/run_differential.py --oracle-python "$oracle_python" --candidate-python "$(python -c 'import sys; print(sys.executable)')"
+
+  public-fallback:
+    name: PyPI fallback / PyPy 3.10
+    needs: [validate, publish-pypi]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "pypy3.10"
+      - name: Install ordinary package from public PyPI with retry
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            python -m pip install --no-cache-dir --index-url https://pypi.org/simple "fast-roman-rs==$RELEASE_VERSION" && break
+            test "$attempt" = 6 && exit 1
+            sleep 20
+          done
+      - name: Prove automatic fallback selection
+        shell: bash
+        run: |
+          python -m pip install "pytest>=8,<10"
+          python -c "import importlib.metadata,roman; assert importlib.metadata.version('fast-roman-rs')=='0.1.0'; assert roman.__file__.endswith('.py'); assert roman.toRoman(972)=='CMLXXII'"
+          candidate_root=$(python -c 'import site; print(site.getsitepackages()[0])')
+          PYTHON=python CANDIDATE_EXPECTED_ROOT="$candidate_root" bash scripts/run_upstream_full.sh
+          python -m venv oracle-venv
+          python scripts/run_differential.py --oracle-python oracle-venv/bin/python --candidate-python "$(python -c 'import sys; print(sys.executable)')"
+
+  github-release:
+    name: Create verified formal GitHub Release
+    needs: [validate, collect, benchmark, post-publish, public-fallback]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-release-distributions
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-release-benchmark
+          path: release-evidence
+      - name: Create checksums
+        run: |
+          mkdir release-assets
+          cp dist/* release-evidence/* release-assets/
+          cd release-assets
+          sha256sum * | sort -k2 > SHA256SUMS
+      - name: Create formal GitHub Release last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: >-
+          gh release create "$RELEASE_TAG" release-assets/*
+          --target "$GITHUB_SHA"
+          --title "fast-roman-rs $RELEASE_TAG"
+          --notes-file docs/RELEASE-NOTES-0.1.0.md

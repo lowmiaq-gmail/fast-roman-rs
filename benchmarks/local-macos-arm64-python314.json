@@ -1,0 +1,110 @@
+{
+  "artifact": "/private/tmp/fast-roman-gates.hXEDos/final-dist/fast_roman_rs-0.1.0-cp310-abi3-macosx_11_0_arm64.whl",
+  "artifact_sha256": "dc3852a77d611a118b5e80138b9aa08001a6079916c0222fda9a022d6a6a4208",
+  "candidate_distribution": "fast-roman-rs==0.1.0",
+  "cases": {
+    "fromRoman": {
+      "candidate": {
+        "median_ns_per_call": 266.455,
+        "oracle_over_candidate_median": 4.588191927342328,
+        "p95_ns_per_call": 288.21416,
+        "raw_ns_per_call": [
+          254.37166,
+          270.6825,
+          234.51334,
+          258.26584,
+          272.75166,
+          261.22416,
+          285.82084,
+          231.5625,
+          263.1275,
+          283.275,
+          279.48168,
+          266.455,
+          231.65916,
+          266.74084,
+          288.21416
+        ]
+      },
+      "oracle": {
+        "median_ns_per_call": 1222.54668,
+        "p95_ns_per_call": 1272.80166,
+        "raw_ns_per_call": [
+          1210.64334,
+          1183.09584,
+          1262.76082,
+          1167.97334,
+          1229.9325,
+          1203.24584,
+          1197.91582,
+          1222.54668,
+          1250.87668,
+          1168.40168,
+          1239.98084,
+          1228.44084,
+          1230.7275,
+          1272.80166,
+          1220.99332
+        ]
+      }
+    },
+    "toRoman": {
+      "candidate": {
+        "median_ns_per_call": 114.795,
+        "oracle_over_candidate_median": 3.1822743150834096,
+        "p95_ns_per_call": 171.46084,
+        "raw_ns_per_call": [
+          111.98582,
+          165.02916,
+          107.17666,
+          171.46084,
+          110.29584,
+          106.3175,
+          145.92,
+          114.795,
+          137.21584,
+          115.13418,
+          102.74,
+          169.41,
+          104.88416,
+          104.7425,
+          161.57166
+        ]
+      },
+      "oracle": {
+        "median_ns_per_call": 365.30918,
+        "p95_ns_per_call": 527.26834,
+        "raw_ns_per_call": [
+          345.83416,
+          354.19334,
+          358.095,
+          361.35,
+          399.4175,
+          527.26834,
+          381.11666,
+          350.65084,
+          353.31084,
+          371.90916,
+          368.61916,
+          361.22584,
+          387.03416,
+          413.96832,
+          365.30918
+        ]
+      }
+    }
+  },
+  "cpu_count": 12,
+  "implementation": "CPython",
+  "inputs_per_iteration": 5000,
+  "iterations": 10,
+  "machine": "arm64",
+  "oracle": "roman==5.2 frozen source",
+  "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "processor": "arm",
+  "python": "3.14.6 (main, Jun 10 2026, 10:03:53) [Clang 21.0.0 (clang-2100.0.123.102)]",
+  "samples": 15,
+  "schema": 1,
+  "semantic_equality": "PASS exhaustive integers 0..4999",
+  "warmup": 3
+}
