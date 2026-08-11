@@ -1,0 +1,23 @@
+[package]
+name = "fast-roman-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "ZPL-2.1"
+description = "Rust implementation of the roman 5.2 conversion contract"
+repository = "https://github.com/lowmiaq-gmail/fast-roman-rs"
+homepage = "https://github.com/lowmiaq-gmail/fast-roman-rs"
+keywords = ["roman", "numerals", "python", "pyo3", "conversion"]
+categories = ["text-processing", "parsing"]
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py310"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true

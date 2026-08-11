@@ -8,6 +8,9 @@
 *.so
 .coverage
 .coverage.*
+.hypothesis/
+.pytest_cache/
+.venv/
 .eggs/
 .installed.cfg
 .mr.developer.cfg
@@ -29,4 +32,5 @@ log/
 parts/
 pyvenv.cfg
 testing.log
+target/
 var/
