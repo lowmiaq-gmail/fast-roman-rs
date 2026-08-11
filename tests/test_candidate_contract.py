@@ -2,6 +2,7 @@ import argparse
 import importlib.util
 from importlib import metadata
 import inspect
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -138,7 +139,9 @@ def test_distribution_typing_and_console_script():
     entries = [entry for entry in distribution.entry_points if entry.group == "console_scripts"]
     assert [(entry.name, entry.value) for entry in entries] == [("roman", "roman:main")]
     assert any(str(path) == "roman/py.typed" for path in distribution.files or [])
-    executable = Path(sys.executable).parent / "roman"
+    executable = Path(sys.executable).parent / (
+        "roman.exe" if os.name == "nt" else "roman"
+    )
     assert executable.is_file()
     assert subprocess.run([executable, "972"], text=True, capture_output=True).stdout == "CMLXXII\n"
     reverse = subprocess.run([executable, "-r", "cMlxxii"], text=True, capture_output=True)
